@@ -1,0 +1,223 @@
+# =============================================================================
+# 「先生」 日本語ウェイクワード — VoxCPM2 TTS 設定 (本番向け)
+# Japanese wake word "sensei" — VoxCPM2 voice-design config (production)
+# =============================================================================
+#
+# Install:   pip install livekit-wakeword[train,voxcpm]
+#            (or with uv: uv sync --extra train --extra voxcpm)
+# Setup:     livekit-wakeword setup --config examples/sensei_ja.yaml
+# Pipeline:  livekit-wakeword run examples/sensei_ja.yaml
+#   or run steps individually (recommended in Colab to survive session resets):
+#     livekit-wakeword generate examples/sensei_ja.yaml
+#     livekit-wakeword augment  examples/sensei_ja.yaml
+#     livekit-wakeword train    examples/sensei_ja.yaml
+#     livekit-wakeword export   examples/sensei_ja.yaml
+#     livekit-wakeword eval     examples/sensei_ja.yaml
+#
+# Requires:  espeak-ng  (brew install espeak-ng / apt install espeak-ng)
+#
+# Schema:    WakeWordConfig in src/livekit/wakeword/config.py
+# See also:  configs/prod_voxcpm.yaml  (Chinese reference example)
+#            notebooks/sensei_ja_colab.ipynb  (Colab training walkthrough)
+#            docs/ja_training_guide.md  (Japanese-specific design notes)
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# model_name (required)
+# -----------------------------------------------------------------------------
+# Output directory name and exported ONNX filename: output/sensei_ja/sensei_ja.onnx
+# Change this when adapting for a different wake word (e.g. "okasan_ja").
+
+model_name: sensei_ja
+
+# -----------------------------------------------------------------------------
+# target_phrases (required)
+# -----------------------------------------------------------------------------
+# Phrases synthesized as positive clips. Both kanji and hiragana forms are
+# included so the model learns both written pronunciations.
+# VoxCPM2 synthesizes in whatever language the text is written in — no
+# language field is needed.
+#
+# To train a different Japanese wake word, replace these lines.
+# Example: ["起動", "きどう"] for "kidou"
+
+target_phrases:
+  - "先生"      # kanji form
+  - "せんせい"  # hiragana form
+
+# =============================================================================
+# Data generation
+# =============================================================================
+
+# tts_backend: voxcpm is required for non-English wake words.
+# Piper (default) is English-US only. VoxCPM2 supports 30+ languages.
+tts_backend: voxcpm
+
+# n_samples — Training clips per synthetic class (positive + adversarial negative).
+# Reduce to 500–2000 for a quick smoke test on Colab free tier.
+n_samples: 25000
+
+# n_samples_val — Validation clips per class (~10–20 % of n_samples).
+n_samples_val: 5000
+
+# n_background_samples — Background-noise clips (tiled from MUSAN subset).
+n_background_samples: 2000
+n_background_samples_val: 500
+
+# tts_batch_size — Ignored by VoxCPM2 (sequential synthesis); kept for schema parity.
+tts_batch_size: 50
+
+# -----------------------------------------------------------------------------
+# custom_negative_phrases
+# -----------------------------------------------------------------------------
+# CMU Pronouncing Dictionary (used for auto adversarial generation) is English-
+# biased and will find few useful phoneme neighbors for Japanese phrases.
+# All Japanese adversarial phrases must therefore be specified here manually.
+#
+# Design principle: include words/phrases that are phonetically close to
+# 「先生」(せんせい) but should NOT trigger the wake word detector.
+# See docs/ja_training_guide.md for a detailed explanation.
+
+custom_negative_phrases:
+  # Sentence-level false friends (先生 + particle/copula)
+  - "先生です"
+  - "先生かな"
+  - "先生って"
+  # Partial / truncated forms
+  - "せんせ"
+  - "せんせー"
+  # Phonetically close homophones / near-homophones
+  - "せいせい"   # 精製 / 製成 — near-phoneme swap
+  - "先制"       # せんせい → せんせい (same reading; good stress-pattern test)
+  - "生成"       # せいせい — two-phoneme transposition
+  - "先週"       # せんしゅう — first mora identical
+  - "せんべい"   # 煎餅 — similar onset
+  - "千歳"       # ちとせ or ちとせ — less close but included for completeness
+  - "専制"       # せんせい (same reading as 先生!) — stress/intonation test
+
+# -----------------------------------------------------------------------------
+# Piper-only TTS controls (ignored when tts_backend is voxcpm; kept for schema parity)
+# -----------------------------------------------------------------------------
+noise_scales: [0.98]
+noise_scale_ws: [0.98]
+length_scales: [0.75, 1.0, 1.25]
+slerp_weights: [0.2, 0.35, 0.5, 0.65, 0.8]
+
+piper_tts:
+  checkpoint_relpath: piper/en-us-libritts-high.pt
+
+# -----------------------------------------------------------------------------
+# voxcpm_tts — VoxCPM2 settings
+# -----------------------------------------------------------------------------
+# voice_design_prompts describe the speaker voice in English; the actual phrase
+# (先生 / せんせい) is synthesized in Japanese regardless of the prompt language.
+# Adding prompts that mention Japanese voice characteristics improves diversity.
+#
+# Clip i cycles through (prompt × cfg_value × inference_timesteps) Cartesian
+# product so generation resumes correctly at start_index after interruption.
+
+voxcpm_tts:
+  model_id: openbmb/VoxCPM2
+  model_cache_relpath: voxcpm/VoxCPM2
+  local_model_path: null
+  load_denoiser: false
+  cfg_values: [1.5, 2.0, 2.5, 3.0]
+  inference_timesteps_list: [8, 10, 12]
+
+  # Voice design prompts — 38 personas including Japanese-accent variants.
+  # These are passed verbatim to VoxCPM2 for voice conditioning.
+  voice_design_prompts:
+    # --- General diverse voices (from upstream default set) ---
+    - "A young adult woman, clear mid-pitch voice, moderate pace, calm and professional"
+    - "A young adult man, warm baritone, steady pace, friendly and articulate"
+    - "A middle-aged woman, slightly low pitch, measured pace, confident tone"
+    - "A middle-aged man, deep resonant voice, slow deliberate pace"
+    - "An older adult woman, soft gentle voice, slower pace, kind tone"
+    - "An older adult man, gravelly tenor, moderate pace, matter-of-fact"
+    - "A young woman, bright energetic tone, slightly faster pace"
+    - "A young man, light tenor, quick conversational pace"
+    - "A woman in her thirties, smooth alto, neutral accent, even pace"
+    - "A man in his thirties, clear baritone, businesslike pace"
+    - "A speaker with a higher pitch, enthusiastic and upbeat, medium-fast pace"
+    - "A speaker with a lower pitch, relaxed and laid-back, slower pace"
+    - "A young adult, gender-neutral delivery, soft volume, careful enunciation"
+    - "A confident presenter voice, strong projection, moderate speed"
+    - "A quiet intimate voice, close-mic feel, slow and clear"
+    - "A news-anchor style voice, authoritative, even rhythm"
+    - "A friendly customer-service tone, slightly smiling, medium pace"
+    - "A tired but clear voice, subdued energy, steady pace"
+    - "A cheerful animated voice, wide pitch range, lively pace"
+    - "A serious formal voice, minimal emotion, precise articulation"
+    - "A speaker with slight vocal fry, casual young adult, medium pace"
+    - "A very smooth polished voice, studio quality, slow to medium pace"
+    - "A nasal bright tone, energetic, faster than average pace"
+    - "A breathy soft voice, gentle, slower pace"
+    - "A robust athletic-sounding voice, strong and direct, medium pace"
+    - "A scholarly tone, thoughtful pauses, slower academic pace"
+    - "A teenager-sounding voice, casual, slightly fast, light pitch"
+    - "A mature executive voice, controlled low dynamics, steady"
+    - "A sing-song playful tone, varied pitch, medium pace"
+    - "A monotone flat delivery, robotic clarity, even speed"
+    - "A husky voice, low energy, medium-slow pace"
+    - "A crisp precise voice, minimal accent, fast clear speech"
+    - "A Southern US English accent, warm tone, conversational pace"
+    - "A British English accent, clear RP-like delivery, moderate pace"
+    # --- 日本語話者向けプロンプト（日本語で記述 — 日本語を母語として話す声を意図） ---
+    - "日本語を自然に話す大人の女性の声"
+    - "日本語を自然に話す大人の男性の声"
+    - "落ち着いた日本語の話し声"
+    - "少し高めの日本語の声"
+    - "少し低めの日本語の声"
+
+# =============================================================================
+# Paths
+# =============================================================================
+
+data_dir: ./data
+output_dir: ./output
+
+# =============================================================================
+# Augmentation
+# =============================================================================
+
+augmentation:
+  clip_duration: 2.0
+  batch_size: 16
+  rounds: 3
+  background_paths: [./data/backgrounds]
+  rir_paths: [./data/rirs]
+
+# =============================================================================
+# Model
+# =============================================================================
+
+model:
+  # conv_attention (recommended): 1D conv + self-attention — best for Japanese
+  # because temporal order of morae (せ-ん-せ-い) matters for disambiguation.
+  model_type: conv_attention
+
+  # medium: good balance of accuracy and Colab inference speed.
+  # Use small for embedded/edge deployment, large for max accuracy.
+  model_size: medium
+
+# =============================================================================
+# Training
+# =============================================================================
+
+steps: 100000
+learning_rate: 0.0001
+weight_decay: 0.01
+label_smoothing: 0.05
+
+# max_negative_weight: 3000 keeps false positives low against phonetically
+# close Japanese homophones (先制, 専制 share the same reading as 先生).
+max_negative_weight: 3000
+
+# target_fp_per_hour: threshold optimization target (false positives / hour).
+target_fp_per_hour: 0.1
+
+batch_n_per_class:
+  positive: 50
+  adversarial_negative: 50
+  ACAV100M_sample: 1024
+  background_noise: 50
